@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <stdio.h>
 
 #include <commctrl.h>
 #ifndef _MSC_VER
@@ -1008,6 +1009,38 @@ static void GetIdFromSystem(HWND hDlg)
     EnableWindow(GetDlgItem(hDlg, 102), TRUE);
 }
 
+void ShowComError(HWND hWnd, HRESULT hr, const char* title = "Error")
+{
+    char buf[1024];
+
+    DWORD len = FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, hr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        buf, sizeof(buf), NULL);
+
+    if (len == 0)
+        wsprintfA(buf, "HRESULT = 0x%08lX (Unknown error)", hr);
+    else
+        wsprintfA(buf + len, "\nHRESULT = 0x%08lX", hr);
+
+    MessageBoxA(hWnd, buf, title, MB_ICONERROR | MB_OK);
+}
+
+const char* ExplainActivationRetCode(ULONG ret)
+{
+    switch (ret) {
+        case 0x0:
+            return "Success.";
+        case 0x151:
+            return "The system refused to accept the Confirmation ID. This usually means the activation subsystem is not supported in your Windows version (likely Windows XP RTM).";
+        case 0x100:
+            return "Invalid Confirmation ID format.";
+        case 0x102:
+            return "The Confirmation ID is not applicable to this system.";
+        default:
+            return "Unknown return code. This may indicate unsupported activation on this Windows version.";
+    }
+}
 
 static void PutIdToSystem(HWND hDlg)
 {
@@ -1034,12 +1067,32 @@ static void PutIdToSystem(HWND hDlg)
     EnableWindow(GetDlgItem(hDlg, 104), TRUE);
     SetDlgItemTextA(hDlg, 103, confirmationId);
 
-    if (FAILED(status) || dwRetCode) {
-        WideCharToMultiByte(CP_ACP, 0, strings[13], -1, ansiString, 256, NULL, NULL);
-        WideCharToMultiByte(CP_ACP, 0, strings[8], -1, ansiString, 256, NULL, NULL);
-        MessageBoxA(hDlg, ansiString, ansiString, MB_ICONSTOP);
-        return;
-    }
+	if (FAILED(status) || dwRetCode) {
+		char hrText[512] = "";
+		DWORD len = FormatMessageA(
+			FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, status, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+			hrText, sizeof(hrText), NULL);
+
+		if (len == 0)
+			wsprintfA(hrText, "HRESULT = 0x%08lX (Unknown error)", status);
+		else
+			wsprintfA(hrText + len, "\nHRESULT = 0x%08lX", status);
+
+		const char* retCodeExplain = ExplainActivationRetCode(dwRetCode);
+
+		char msg[1400];
+		wsprintfA(
+			msg,
+			"Activation failed!\n\n"
+			"%s"
+			"\nReturn code: 0x%08lX (%lu)\n%s",
+			hrText, dwRetCode, dwRetCode, retCodeExplain
+		);
+
+		MessageBoxA(hDlg, msg, "Activation Error", MB_ICONERROR | MB_OK);
+		return;
+	}
 
     WideCharToMultiByte(CP_ACP, 0, strings[0], -1, ansiString, 256, NULL, NULL);
     WideCharToMultiByte(CP_ACP, 0, strings[9], -1, ansiString, 256, NULL, NULL);
@@ -1083,8 +1136,50 @@ INT_PTR CALLBACK DialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	return FALSE;
 }
 
+bool IsWindowsXPRTM()
+{
+    OSVERSIONINFOEX osvi;
+    ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
+    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+
+    if (!GetVersionEx((OSVERSIONINFO*)&osvi)) 
+	{
+        OSVERSIONINFO osvi2;
+        ZeroMemory(&osvi2, sizeof(OSVERSIONINFO));
+        osvi2.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+        if (!GetVersionEx(&osvi2))
+            return false;
+
+        return (
+            osvi2.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+            osvi2.dwMajorVersion == 5 &&
+            osvi2.dwMinorVersion == 1 &&
+            osvi2.dwBuildNumber == 2600
+        );
+    }
+    return (
+        osvi.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+        osvi.dwMajorVersion == 5 &&
+        osvi.dwMinorVersion == 1 &&
+        osvi.dwBuildNumber == 2600 &&
+        osvi.szCSDVersion[0] == '\0'
+    );
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+	if (IsWindowsXPRTM())
+    {
+        MessageBoxA(
+            NULL,
+            "WARNING: This program is running on Windows XP RTM (no Service Pack).\n\n"
+            "Some activation features may not work correctly. "
+            "Please use Windows XP SP1 or newer for full functionality.",
+            "Windows XP Version Warning",
+            MB_ICONWARNING | MB_OK
+        );
+    }
+
     INITCOMMONCONTROLSEX cc = { sizeof(INITCOMMONCONTROLSEX), ICC_WIN95_CLASSES };
     InitCommonControlsEx(&cc);
 
